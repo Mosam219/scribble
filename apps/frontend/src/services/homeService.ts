@@ -17,12 +17,15 @@ type CreateRoomPayload = Parameters<
 >[0];
 
 type JoinRoomPayload = Parameters<ClientEvents[SocketClientEvent.JoinRoom]>[0];
+type StartGamePayload = Parameters<
+  ClientEvents[SocketClientEvent.StartGame]
+>[0];
 
 export class HomeService {
   private socket: Socket<ServerEvents, ClientEvents> | null = null;
   private config?: HomeServiceConfig;
 
-  constructor(config?: HomeServiceConfig = {}) {
+  constructor(config: HomeServiceConfig = {}) {
     this.config = config;
   }
 
@@ -72,6 +75,13 @@ export class HomeService {
       throw new Error("Socket not connected");
     }
     this.socket.emit(SocketClientEvent.JoinRoom, payload);
+  }
+
+  startGame(payload: StartGamePayload) {
+    if (!this.socket) {
+      throw new Error("Socket not connected");
+    }
+    this.socket.emit(SocketClientEvent.StartGame, payload);
   }
 
   disconnect() {

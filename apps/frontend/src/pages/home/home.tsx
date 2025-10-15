@@ -13,7 +13,7 @@ import { HomeService } from "@/services/homeService";
 import { SocketServerEvent } from "@scribble/shared";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FC, FormEvent } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import type { StepCardProps } from "./types";
 import StepCard from "./stepCard";
 import { Copy } from "lucide-react";
@@ -50,6 +50,7 @@ const steps: StepCardProps[] = [
 
 const Home: FC = () => {
   const { roomId } = useParams();
+  const navigate = useNavigate();
 
   const [mode, setMode] = useState<"join" | "create" | "lobby">(
     roomId ? "join" : "create"
@@ -63,6 +64,7 @@ const Home: FC = () => {
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
 
   const [members, setMembers] = useState<string[]>([]);
+  const [hostUsername, setHostUsername] = useState<string>("");
   const [statusMessage, setStatusMessage] = useState<string>("");
 
   const serviceRef = useRef<HomeService | null>(null);
@@ -90,9 +92,18 @@ const Home: FC = () => {
         setMode("lobby");
         setStatusMessage(`You joined room ${joinedRoomId}.`);
       },
-      [SocketServerEvent.RoomUpdated]: ({ roomId: updatedRoomId, members }) => {
+      [SocketServerEvent.RoomUpdated]: ({
+        roomId: updatedRoomId,
+        members,
+        hostUsername: hostName,
+      }) => {
         setActiveRoomId(updatedRoomId);
         setMembers(members);
+        setHostUsername(hostName);
+      },
+      [SocketServerEvent.GameStarted]: ({ roomId: startedRoomId }) => {
+        setStatusMessage("Game starting...");
+        navigate(`/${startedRoomId}/game`);
       },
       [SocketServerEvent.RoomFull]: ({ roomId: fullRoomId }) => {
         setStatusMessage(`Room ${fullRoomId} is full. Try another code.`);
@@ -101,6 +112,7 @@ const Home: FC = () => {
         setStatusMessage(`Room ${missingRoomId} could not be found.`);
         setActiveRoomId("");
         setMembers([]);
+        setHostUsername("");
       },
     });
 
@@ -108,7 +120,7 @@ const Home: FC = () => {
       service.disconnect();
       serviceRef.current = null;
     };
-  }, []);
+  }, [navigate]);
 
   const targetRoomId = activeRoomId || joinCode;
 
@@ -146,7 +158,17 @@ const Home: FC = () => {
     setUserName(username);
     setMode("join");
     setMembers([]);
+    setHostUsername(username);
     service.createRoom({ username, roomTitle });
+  };
+
+  const handleStartGame = () => {
+    const service = serviceRef.current;
+    if (!service || !activeRoomId) {
+      return;
+    }
+    setStatusMessage("Starting game...");
+    service.startGame({ roomId: activeRoomId });
   };
 
   const renderLobby = () => {
@@ -166,6 +188,8 @@ const Home: FC = () => {
       if (b === userName) return 1;
       return a.localeCompare(b);
     });
+
+    const isHost = userName === hostUsername;
 
     return (
       <Card className="border-primary/30 bg-primary/5 backdrop-blur">
@@ -255,6 +279,17 @@ const Home: FC = () => {
             )}
           </div>
         </CardContent>
+        <CardFooter>
+          {isHost ? (
+            <Button type="button" className="w-full" onClick={handleStartGame}>
+              Start game
+            </Button>
+          ) : (
+            <p className="w-full text-center text-sm text-muted-foreground">
+              Waiting for the host to start the game…
+            </p>
+          )}
+        </CardFooter>
       </Card>
     );
   };

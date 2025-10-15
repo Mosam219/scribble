@@ -47,6 +47,7 @@ const io = new Server<
 type Room = {
   id: string;
   hostId: string;
+  hostUsername: string;
   roomName: string;
   members: Set<string>;
 };
@@ -59,6 +60,7 @@ const broadcastRoomUpdate = (room: Room) => {
   const roomState: SocketRoomState = {
     roomId: room.id,
     members: Array.from(room.members.values()),
+    hostUsername: room.hostUsername,
   };
   io.to(room.id).emit(SocketServerEvent.RoomUpdated, roomState);
 };
@@ -81,9 +83,11 @@ io.on("connection", (socket) => {
     const room: Room = {
       id: roomId,
       hostId: socket.id,
+      hostUsername: trimmedName,
       roomName: roomTitle,
       members: new Set([trimmedName]),
     };
+    console.log(username, trimmedName, "hee");
 
     rooms.set(roomId, room);
     socket.join(roomId);
@@ -129,6 +133,27 @@ io.on("connection", (socket) => {
       username: trimmedName,
     });
     broadcastRoomUpdate(room);
+  });
+
+  socket.on(SocketClientEvent.StartGame, ({ roomId }) => {
+    const trimmedRoomId = roomId?.trim().toUpperCase();
+    if (!trimmedRoomId) {
+      return;
+    }
+
+    const room = rooms.get(trimmedRoomId);
+    if (!room) {
+      socket.emit(SocketServerEvent.RoomNotFound, {
+        roomId: trimmedRoomId,
+      });
+      return;
+    }
+
+    if (socket.id !== room.hostId) {
+      return;
+    }
+
+    io.to(room.id).emit(SocketServerEvent.GameStarted, { roomId: room.id });
   });
 
   socket.on("disconnect", (reason) => {
