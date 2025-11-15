@@ -9,9 +9,9 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { HomeService } from "@/services/homeService";
-import { SocketServerEvent } from "@scribble/shared";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useSocketService } from "@/contexts/socketServiceContext";
+import { SocketServerEvent, type Player } from "@scribble/shared";
+import { useEffect, useMemo, useState } from "react";
 import type { FC, FormEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import type { StepCardProps } from "./types";
@@ -63,19 +63,31 @@ const Home: FC = () => {
   );
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
 
-  const [members, setMembers] = useState<string[]>([]);
+  const [members, setMembers] = useState<Player[]>([]);
   const [hostUsername, setHostUsername] = useState<string>("");
   const [statusMessage, setStatusMessage] = useState<string>("");
 
-  const serviceRef = useRef<HomeService | null>(null);
+  const service = useSocketService();
 
   useEffect(() => {
-    const service = new HomeService();
-    serviceRef.current = service;
-
     setStatusMessage("Connecting to the game server...");
 
-    service.connect({
+    const unsubscribeRoomState = service.subscribeToRoomState((state) => {
+      if (state) {
+        setActiveRoomId(state.roomId);
+        setMembers(state.members);
+        setHostUsername(state.hostUsername);
+        setJoinCode((current) =>
+          current.trim().length > 0 ? current : state.roomId
+        );
+      } else {
+        setActiveRoomId("");
+        setMembers([]);
+        setHostUsername("");
+      }
+    });
+
+    const removeListeners = service.connect({
       [SocketServerEvent.Welcome]: (message) => {
         setStatusMessage(message);
       },
@@ -91,15 +103,6 @@ const Home: FC = () => {
         setUserName(username);
         setMode("lobby");
         setStatusMessage(`You joined room ${joinedRoomId}.`);
-      },
-      [SocketServerEvent.RoomUpdated]: ({
-        roomId: updatedRoomId,
-        members,
-        hostUsername: hostName,
-      }) => {
-        setActiveRoomId(updatedRoomId);
-        setMembers(members);
-        setHostUsername(hostName);
       },
       [SocketServerEvent.GameStarted]: ({ roomId: startedRoomId }) => {
         setStatusMessage("Game starting...");
@@ -117,10 +120,10 @@ const Home: FC = () => {
     });
 
     return () => {
-      service.disconnect();
-      serviceRef.current = null;
+      removeListeners();
+      unsubscribeRoomState();
     };
-  }, [navigate]);
+  }, [navigate, service]);
 
   const targetRoomId = activeRoomId || joinCode;
 
@@ -136,8 +139,7 @@ const Home: FC = () => {
 
   const handleJoinRoom = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const service = serviceRef.current;
-    if (joinDisabled || !service) {
+    if (joinDisabled) {
       return;
     }
     const username = userName.trim();
@@ -149,8 +151,7 @@ const Home: FC = () => {
 
   const handleCreateRoom = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const service = serviceRef.current;
-    if (createDisabled || !service) {
+    if (createDisabled) {
       return;
     }
     const username = userName.trim();
@@ -163,8 +164,7 @@ const Home: FC = () => {
   };
 
   const handleStartGame = () => {
-    const service = serviceRef.current;
-    if (!service || !activeRoomId) {
+    if (!activeRoomId) {
       return;
     }
     setStatusMessage("Starting game...");
@@ -176,17 +176,17 @@ const Home: FC = () => {
       return null;
     }
 
-    const players =
-      members.length > 0 || userName
-        ? Array.from(
-            new Set(members.length > 0 ? members : userName ? [userName] : [])
-          )
+    const players: Player[] =
+      members.length > 0
+        ? members
+        : userName
+        ? [{ id: "self", name: userName }]
         : [];
 
-    const sortedPlayers = players.sort((a, b) => {
-      if (a === userName) return -1;
-      if (b === userName) return 1;
-      return a.localeCompare(b);
+    const sortedPlayers = [...players].sort((a, b) => {
+      if (a.name === userName) return -1;
+      if (b.name === userName) return 1;
+      return a.name.localeCompare(b.name);
     });
 
     const isHost = userName === hostUsername;
@@ -264,11 +264,11 @@ const Home: FC = () => {
               <ul className="space-y-2">
                 {sortedPlayers.map((member) => (
                   <li
-                    key={member}
+                    key={member.id}
                     className="flex items-center justify-between rounded-lg border border-primary/15 bg-background/80 px-3 py-2 text-sm text-foreground shadow-sm"
                   >
-                    <span>{member}</span>
-                    {member === userName && (
+                    <span>{member.name}</span>
+                    {member.name === userName && (
                       <span className="rounded bg-primary/15 px-2 py-0.5 text-xs font-semibold uppercase text-primary">
                         You
                       </span>

@@ -49,7 +49,8 @@ type Room = {
   hostId: string;
   hostUsername: string;
   roomName: string;
-  members: Set<string>;
+  members: Map<string, string>;
+  currentPlayerUsername: string | null;
 };
 
 const rooms = new Map<string, Room>();
@@ -59,8 +60,12 @@ const createRoomCode = () => randomUUID().slice(0, 6).toUpperCase();
 const broadcastRoomUpdate = (room: Room) => {
   const roomState: SocketRoomState = {
     roomId: room.id,
-    members: Array.from(room.members.values()),
+    members: Array.from(room.members.entries()).map(([id, name]) => ({
+      id,
+      name,
+    })),
     hostUsername: room.hostUsername,
+    currentPlayerUsername: room.currentPlayerUsername,
   };
   io.to(room.id).emit(SocketServerEvent.RoomUpdated, roomState);
 };
@@ -85,9 +90,9 @@ io.on("connection", (socket) => {
       hostId: socket.id,
       hostUsername: trimmedName,
       roomName: roomTitle,
-      members: new Set([trimmedName]),
+      members: new Map([[socket.id, trimmedName]]),
+      currentPlayerUsername: trimmedName,
     };
-    console.log(username, trimmedName, "hee");
 
     rooms.set(roomId, room);
     socket.join(roomId);
@@ -101,6 +106,11 @@ io.on("connection", (socket) => {
     });
     broadcastRoomUpdate(room);
   });
+
+  const chooseNextCurrentPlayer = (room: Room) => {
+    const nextPlayer = room.members.values().next().value ?? null;
+    room.currentPlayerUsername = nextPlayer ?? null;
+  };
 
   socket.on(SocketClientEvent.JoinRoom, ({ roomId, username }) => {
     const trimmedRoomId = roomId?.trim().toUpperCase();
@@ -123,7 +133,7 @@ io.on("connection", (socket) => {
       return;
     }
 
-    room.members.add(trimmedName);
+    room.members.set(socket.id, trimmedName);
     socket.join(trimmedRoomId);
     socket.data.username = trimmedName;
     socket.data.roomId = trimmedRoomId;
@@ -132,6 +142,11 @@ io.on("connection", (socket) => {
       roomId: trimmedRoomId,
       username: trimmedName,
     });
+
+    if (!room.currentPlayerUsername) {
+      chooseNextCurrentPlayer(room);
+    }
+
     broadcastRoomUpdate(room);
   });
 
@@ -169,7 +184,11 @@ io.on("connection", (socket) => {
       return;
     }
 
-    room.members.delete(username);
+    room.members.delete(socket.id);
+
+    if (room.currentPlayerUsername === username) {
+      chooseNextCurrentPlayer(room);
+    }
 
     if (room.members.size === 0 || socket.id === room.hostId) {
       rooms.delete(roomId);

@@ -4,10 +4,16 @@ export * from "./enums";
 
 export const MAX_ROOM_SIZE = 8;
 
+export type Player = {
+  id: string;
+  name: string;
+};
+
 export type SocketRoomState = {
   roomId: string;
-  members: string[];
+  members: Player[];
   hostUsername: string;
+  currentPlayerUsername: string | null;
 };
 
 export type SocketServerEventPayloads = {
