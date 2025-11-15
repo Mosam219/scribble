@@ -10,10 +10,11 @@ import { useSocketService } from "@/contexts/socketServiceContext";
 import { cn } from "@/lib/utils";
 import type { SocketRoomState } from "@scribble/shared";
 import { Users } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ChatPanel } from "./components/chatPanel";
 import { Canvas, type CanvasHandle } from "./components/canvas";
+import { SocketServerEvent, type CanvasStrokeSegment } from "@scribble/shared";
 
 function Game() {
   const canvasRef = useRef<CanvasHandle | null>(null);
@@ -41,7 +42,7 @@ function Game() {
       .map((player) => ({
         ...player,
         isHost: player.name === lobbyState.hostUsername,
-        isCurrent: player.name === lobbyState.currentPlayerUsername,
+        isCurrent: player.id === lobbyState.currentPlayerId,
         isSelf: currentPlayerId
           ? player.id === currentPlayerId
           : currentUsername
@@ -59,6 +60,35 @@ function Game() {
 
   const activeRoomId = lobbyState?.roomId ?? roomId ?? "Loading...";
   const chatMessages = lobbyState?.chatMessages ?? [];
+  const canDraw =
+    Boolean(
+      lobbyState?.currentPlayerId &&
+        currentPlayer?.id === lobbyState.currentPlayerId
+    ) && Boolean(currentPlayer);
+
+  const currentDrawerName = useMemo(() => {
+    if (!lobbyState?.currentPlayerId) {
+      return null;
+    }
+    return (
+      lobbyState.members.find(
+        (member) => member.id === lobbyState.currentPlayerId
+      )?.name ?? null
+    );
+  }, [lobbyState]);
+
+  const statusMessage = (() => {
+    if (!lobbyState) {
+      return "Connecting to the game...";
+    }
+    if (canDraw && currentPlayer) {
+      return "It's your turn to draw!";
+    }
+    if (currentDrawerName) {
+      return `${currentDrawerName} is drawing`;
+    }
+    return "Waiting for the game to start";
+  })();
 
   const handleLeaveLobby = () => {
     const destinationRoomId = lobbyState?.roomId ?? roomId ?? "";
@@ -80,6 +110,55 @@ function Game() {
       authorId: currentPlayer.id,
     });
   };
+
+  const handleLocalDrawing = useCallback(
+    (segments: CanvasStrokeSegment[]) => {
+      if (!lobbyState?.roomId || !currentPlayer || segments.length === 0) {
+        return;
+      }
+      service.sendDrawing({
+        roomId: lobbyState.roomId,
+        authorId: currentPlayer.id,
+        segments,
+      });
+    },
+    [currentPlayer, lobbyState?.roomId, service]
+  );
+
+  const handleClearCanvas = useCallback(() => {
+    if (!lobbyState?.roomId || !currentPlayer) {
+      canvasRef.current?.clear();
+      return;
+    }
+    service.sendClearCanvas({
+      roomId: lobbyState.roomId,
+      authorId: currentPlayer.id,
+    });
+    canvasRef.current?.clear();
+  }, [currentPlayer, lobbyState?.roomId, service]);
+
+  useEffect(() => {
+    const removeDrawingListener = service.on(
+      SocketServerEvent.DrawingBroadcast,
+      ({ segments }) => {
+        if (!segments.length) {
+          return;
+        }
+        canvasRef.current?.applyRemoteSegments(segments);
+      }
+    );
+    const removeClearListener = service.on(
+      SocketServerEvent.CanvasCleared,
+      () => {
+        canvasRef.current?.clear();
+      }
+    );
+
+    return () => {
+      removeDrawingListener();
+      removeClearListener();
+    };
+  }, [service]);
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-background via-background/95 to-background">
@@ -185,7 +264,14 @@ function Game() {
               </div>
             </CardHeader>
             <CardContent className="flex-1">
-              <Canvas ref={canvasRef} />
+              <Canvas
+                ref={canvasRef}
+                statusMessage={statusMessage}
+                canDraw={canDraw}
+                onLocalSegments={handleLocalDrawing}
+                onRequestClear={handleClearCanvas}
+                clearDisabled={!canDraw}
+              />
             </CardContent>
             <CardFooter className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
               <div>

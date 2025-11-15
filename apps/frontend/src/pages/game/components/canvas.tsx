@@ -7,6 +7,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useRef,
@@ -14,14 +15,20 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+import type { CanvasStrokeSegment, CanvasPoint } from "@scribble/shared";
 
 export type CanvasHandle = {
   clear: () => void;
+  applyRemoteSegments: (segments: CanvasStrokeSegment[]) => void;
 };
 
 type CanvasProps = {
   className?: string;
   statusMessage?: string;
+  canDraw?: boolean;
+  onLocalSegments?: (segments: CanvasStrokeSegment[]) => void;
+  onRequestClear?: () => void;
+  clearDisabled?: boolean;
 };
 
 const colorOptions = [
@@ -34,6 +41,13 @@ const colorOptions = [
   "#ffffff",
 ];
 const sizeOptions = [2, 4, 6, 8, 12];
+
+const createStrokeId = () => {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random()}`;
+};
 
 type HoverToolProps = {
   label?: string;
@@ -72,12 +86,25 @@ function HoverTool({ label, indicator, children }: HoverToolProps) {
 }
 
 export const Canvas = forwardRef<CanvasHandle, CanvasProps>(
-  ({ className, statusMessage = "Ready to draw" }, ref) => {
+  (
+    {
+      className,
+      statusMessage = "Ready to draw",
+      canDraw = true,
+      onLocalSegments,
+      onRequestClear,
+      clearDisabled = false,
+    },
+    ref
+  ) => {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const wrapperRef = useRef<HTMLDivElement | null>(null);
     const isDrawingRef = useRef(false);
     const lastPointRef = useRef<{ x: number; y: number } | null>(null);
     const contextRef = useRef<CanvasRenderingContext2D | null>(null);
+    const currentStrokeIdRef = useRef<string | null>(null);
+    const pendingSegmentsRef = useRef<CanvasStrokeSegment[]>([]);
+    const batchTimeoutRef = useRef<number | null>(null);
     const [brushColor, setBrushColor] = useState<string>(colorOptions[0]);
     const [brushSize, setBrushSize] = useState<number>(6);
 
@@ -129,17 +156,83 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(
       };
     };
 
+    const getCanvasDimensions = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) {
+        return { width: 1, height: 1 };
+      }
+      const rect = canvas.getBoundingClientRect();
+      return {
+        width: rect.width || 1,
+        height: rect.height || 1,
+      };
+    };
+
+    const normalizePoint = ({ x, y }: { x: number; y: number }): CanvasPoint => {
+      const { width, height } = getCanvasDimensions();
+      return {
+        x: width ? x / width : 0,
+        y: height ? y / height : 0,
+      };
+    };
+
+    const denormalizePoint = ({ x, y }: CanvasPoint) => {
+      const { width, height } = getCanvasDimensions();
+      return {
+        x: x * width,
+        y: y * height,
+      };
+    };
+
+    const flushPendingSegments = useCallback(() => {
+      if (batchTimeoutRef.current !== null) {
+        window.clearTimeout(batchTimeoutRef.current);
+        batchTimeoutRef.current = null;
+      }
+      if (pendingSegmentsRef.current.length === 0 || !onLocalSegments) {
+        pendingSegmentsRef.current = [];
+        return;
+      }
+      const batch = pendingSegmentsRef.current;
+      pendingSegmentsRef.current = [];
+      onLocalSegments(batch);
+    }, [onLocalSegments]);
+
+    useEffect(() => {
+      return () => {
+        flushPendingSegments();
+      };
+    }, [flushPendingSegments]);
+
+    const queueSegment = useCallback(
+      (segment: CanvasStrokeSegment) => {
+        if (!onLocalSegments) {
+          return;
+        }
+        pendingSegmentsRef.current.push(segment);
+        if (batchTimeoutRef.current !== null) {
+          return;
+        }
+        batchTimeoutRef.current = window.setTimeout(() => {
+          batchTimeoutRef.current = null;
+          flushPendingSegments();
+        }, 50);
+      },
+      [flushPendingSegments, onLocalSegments]
+    );
+
     const handlePointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-      if (!contextRef.current) return;
+      if (!contextRef.current || !canDraw) return;
       const canvas = canvasRef.current;
       if (!canvas) return;
       canvas.setPointerCapture(event.pointerId);
       isDrawingRef.current = true;
       lastPointRef.current = getPoint(event);
+      currentStrokeIdRef.current = createStrokeId();
     };
 
     const handlePointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
-      if (!isDrawingRef.current || !contextRef.current) return;
+      if (!isDrawingRef.current || !contextRef.current || !canDraw) return;
       const currentPoint = getPoint(event);
       const lastPoint = lastPointRef.current;
       if (!lastPoint) {
@@ -152,6 +245,16 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(
       ctx.lineTo(currentPoint.x, currentPoint.y);
       ctx.stroke();
       ctx.closePath();
+      if (currentStrokeIdRef.current) {
+        queueSegment({
+          strokeId: currentStrokeIdRef.current,
+          color: brushColor,
+          size: brushSize,
+          points: [lastPoint, currentPoint].map((point) =>
+            normalizePoint(point)
+          ),
+        });
+      }
       lastPointRef.current = currentPoint;
     };
 
@@ -162,8 +265,12 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(
           canvas.releasePointerCapture(event.pointerId);
         } catch {}
       }
+      if (isDrawingRef.current) {
+        flushPendingSegments();
+      }
       isDrawingRef.current = false;
       lastPointRef.current = null;
+      currentStrokeIdRef.current = null;
     };
 
     const clearCanvas = () => {
@@ -173,9 +280,52 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(
       ctx.clearRect(0, 0, canvas.width, canvas.height);
     };
 
-    useImperativeHandle(ref, () => ({
-      clear: clearCanvas,
-    }));
+    const drawSegments = useCallback((segments: CanvasStrokeSegment[]) => {
+      const ctx = contextRef.current;
+      if (!ctx || segments.length === 0) {
+        return;
+      }
+      const previousStrokeStyle = ctx.strokeStyle;
+      const previousLineWidth = ctx.lineWidth;
+
+      for (const segment of segments) {
+        if (!Array.isArray(segment.points) || segment.points.length < 2) {
+          continue;
+        }
+        ctx.strokeStyle = segment.color;
+        ctx.lineWidth = segment.size;
+        const [first, ...rest] = segment.points;
+        const firstPoint = denormalizePoint(first);
+        ctx.beginPath();
+        ctx.moveTo(firstPoint.x, firstPoint.y);
+        rest.forEach((point) => {
+          const actualPoint = denormalizePoint(point);
+          ctx.lineTo(actualPoint.x, actualPoint.y);
+        });
+        ctx.stroke();
+        ctx.closePath();
+      }
+
+      ctx.strokeStyle = previousStrokeStyle;
+      ctx.lineWidth = previousLineWidth;
+    }, []);
+
+    useImperativeHandle(
+      ref,
+      () => ({
+        clear: clearCanvas,
+        applyRemoteSegments: drawSegments,
+      }),
+      [drawSegments]
+    );
+
+    const handleClearClick = () => {
+      if (clearDisabled) {
+        return;
+      }
+      clearCanvas();
+      onRequestClear?.();
+    };
 
     return (
       <div
@@ -187,7 +337,10 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(
       >
         <canvas
           ref={canvasRef}
-          className="h-full w-full cursor-crosshair bg-gradient-to-br from-background via-background/80 to-background/60"
+          className={cn(
+            "h-full w-full bg-gradient-to-br from-background via-background/80 to-background/60",
+            canDraw ? "cursor-crosshair" : "cursor-not-allowed"
+          )}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={endDrawing}
@@ -275,8 +428,9 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(
               type="button"
               size="sm"
               variant="secondary"
-              onClick={clearCanvas}
+              onClick={handleClearClick}
               className="w-full p-2"
+              disabled={clearDisabled}
             >
               Clear
             </Button>

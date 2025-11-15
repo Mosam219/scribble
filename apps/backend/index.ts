@@ -11,6 +11,9 @@ import {
   SocketServerEvent,
   SocketServerEventsMap,
   type ChatMessage,
+  type CanvasDrawingPayload,
+  type CanvasStrokeSegment,
+  type CanvasPoint,
 } from "@scribble/shared";
 
 const app = express();
@@ -51,7 +54,7 @@ type Room = {
   hostUsername: string;
   roomName: string;
   members: Map<string, string>;
-  currentPlayerUsername: string | null;
+  currentPlayerId: string | null;
   chatMessages: ChatMessage[];
 };
 
@@ -68,7 +71,7 @@ const broadcastRoomUpdate = (room: Room) => {
       name,
     })),
     hostUsername: room.hostUsername,
-    currentPlayerUsername: room.currentPlayerUsername,
+    currentPlayerId: room.currentPlayerId,
     chatMessages: room.chatMessages,
   };
   io.to(room.id).emit(SocketServerEvent.RoomUpdated, roomState);
@@ -95,7 +98,7 @@ io.on("connection", (socket) => {
       hostUsername: trimmedName,
       roomName: roomTitle,
       members: new Map([[socket.id, trimmedName]]),
-      currentPlayerUsername: trimmedName,
+      currentPlayerId: socket.id,
       chatMessages: [],
     };
 
@@ -114,8 +117,8 @@ io.on("connection", (socket) => {
   });
 
   const chooseNextCurrentPlayer = (room: Room) => {
-    const nextPlayer = room.members.values().next().value ?? null;
-    room.currentPlayerUsername = nextPlayer ?? null;
+    const nextPlayerId = room.members.keys().next().value ?? null;
+    room.currentPlayerId = nextPlayerId ?? null;
   };
 
   socket.on(SocketClientEvent.JoinRoom, ({ roomId, username }) => {
@@ -150,7 +153,7 @@ io.on("connection", (socket) => {
       playerId: socket.id,
     });
 
-    if (!room.currentPlayerUsername) {
+    if (!room.currentPlayerId) {
       chooseNextCurrentPlayer(room);
     }
 
@@ -205,6 +208,126 @@ io.on("connection", (socket) => {
     }
   );
 
+  const sanitizePoint = (point: CanvasPoint): CanvasPoint | null => {
+    const x = Number(point?.x);
+    const y = Number(point?.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return null;
+    }
+    return { x, y };
+  };
+
+  const sanitizeSegments = (segments: CanvasStrokeSegment[]) => {
+    return segments
+      .map((segment) => {
+        const strokeId =
+          typeof segment?.strokeId === "string"
+            ? segment.strokeId.trim()
+            : undefined;
+        const color =
+          typeof segment?.color === "string" ? segment.color.trim() : undefined;
+        const size = Number(segment?.size);
+        if (
+          !strokeId ||
+          !color ||
+          !Number.isFinite(size) ||
+          !Array.isArray(segment?.points)
+        ) {
+          return null;
+        }
+
+        const sanitizedPoints = segment.points
+          .map((point) => sanitizePoint(point))
+          .filter((point): point is CanvasPoint => point !== null);
+
+        if (sanitizedPoints.length === 0) {
+          return null;
+        }
+
+        return {
+          strokeId,
+          color,
+          size,
+          points: sanitizedPoints,
+        };
+      })
+      .filter(
+        (segment): segment is CanvasStrokeSegment => segment !== null
+      );
+  };
+
+  socket.on(
+    SocketClientEvent.SendDrawing,
+    ({ roomId, authorId, segments }: CanvasDrawingPayload) => {
+      const trimmedRoomId = roomId?.trim().toUpperCase();
+      if (!trimmedRoomId) {
+        return;
+      }
+
+      const room = rooms.get(trimmedRoomId);
+      if (!room) {
+        socket.emit(SocketServerEvent.RoomNotFound, {
+          roomId: trimmedRoomId,
+        });
+        return;
+      }
+
+      if (!room.members.has(socket.id)) {
+        return;
+      }
+
+      if (authorId !== socket.id) {
+        return;
+      }
+
+      if (!Array.isArray(segments) || segments.length === 0) {
+        return;
+      }
+
+      const sanitizedSegments = sanitizeSegments(segments);
+      if (sanitizedSegments.length === 0) {
+        return;
+      }
+
+      socket.to(trimmedRoomId).emit(SocketServerEvent.DrawingBroadcast, {
+        roomId: trimmedRoomId,
+        authorId: socket.id,
+        segments: sanitizedSegments,
+      });
+    }
+  );
+
+  socket.on(
+    SocketClientEvent.ClearCanvas,
+    ({ roomId, authorId }: { roomId: string; authorId: string }) => {
+      const trimmedRoomId = roomId?.trim().toUpperCase();
+      if (!trimmedRoomId) {
+        return;
+      }
+
+      const room = rooms.get(trimmedRoomId);
+      if (!room) {
+        socket.emit(SocketServerEvent.RoomNotFound, {
+          roomId: trimmedRoomId,
+        });
+        return;
+      }
+
+      if (!room.members.has(socket.id)) {
+        return;
+      }
+
+      if (authorId !== socket.id) {
+        return;
+      }
+
+      socket.to(trimmedRoomId).emit(SocketServerEvent.CanvasCleared, {
+        roomId: trimmedRoomId,
+        authorId: socket.id,
+      });
+    }
+  );
+
   socket.on(SocketClientEvent.StartGame, ({ roomId }) => {
     const trimmedRoomId = roomId?.trim().toUpperCase();
     if (!trimmedRoomId) {
@@ -241,7 +364,7 @@ io.on("connection", (socket) => {
 
     room.members.delete(socket.id);
 
-    if (room.currentPlayerUsername === username) {
+    if (room.currentPlayerId === socket.id) {
       chooseNextCurrentPlayer(room);
     }
 

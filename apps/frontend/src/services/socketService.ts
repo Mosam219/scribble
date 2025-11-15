@@ -26,6 +26,12 @@ type StartGamePayload = Parameters<
 type SendChatMessagePayload = Parameters<
   ClientEvents[SocketClientEvent.SendChatMessage]
 >[0];
+type SendDrawingPayload = Parameters<
+  ClientEvents[SocketClientEvent.SendDrawing]
+>[0];
+type ClearCanvasPayload = Parameters<
+  ClientEvents[SocketClientEvent.ClearCanvas]
+>[0];
 
 export class SocketService {
   private socket: Socket<ServerEvents, ClientEvents> | null = null;
@@ -172,6 +178,19 @@ export class SocketService {
   sendChatMessage(payload: SendChatMessagePayload) {
     const socket = this.ensureSocket();
     socket.emit(SocketClientEvent.SendChatMessage, payload);
+  }
+
+  sendDrawing(payload: SendDrawingPayload) {
+    if (!payload.segments.length) {
+      return;
+    }
+    const socket = this.ensureSocket();
+    socket.emit(SocketClientEvent.SendDrawing, payload);
+  }
+
+  sendClearCanvas(payload: ClearCanvasPayload) {
+    const socket = this.ensureSocket();
+    socket.emit(SocketClientEvent.ClearCanvas, payload);
   }
 
   getCurrentUsername() {

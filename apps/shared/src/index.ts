@@ -17,11 +17,29 @@ export type ChatMessage = {
   timestamp: number;
 };
 
+export type CanvasPoint = {
+  x: number;
+  y: number;
+};
+
+export type CanvasStrokeSegment = {
+  strokeId: string;
+  color: string;
+  size: number;
+  points: CanvasPoint[];
+};
+
+export type CanvasDrawingPayload = {
+  roomId: string;
+  authorId: string;
+  segments: CanvasStrokeSegment[];
+};
+
 export type SocketRoomState = {
   roomId: string;
   members: Player[];
   hostUsername: string;
-  currentPlayerUsername: string | null;
+  currentPlayerId: string | null;
   chatMessages: ChatMessage[];
 };
 
@@ -37,6 +55,8 @@ export type SocketServerEventPayloads = {
   [SocketServerEvent.GameStarted]: { roomId: string };
   [SocketServerEvent.RoomFull]: { roomId: string };
   [SocketServerEvent.RoomNotFound]: { roomId: string };
+  [SocketServerEvent.DrawingBroadcast]: CanvasDrawingPayload;
+  [SocketServerEvent.CanvasCleared]: { roomId: string; authorId: string };
 };
 
 export type SocketClientEventPayloads = {
@@ -48,6 +68,8 @@ export type SocketClientEventPayloads = {
     message: string;
     authorId: string;
   };
+  [SocketClientEvent.SendDrawing]: CanvasDrawingPayload;
+  [SocketClientEvent.ClearCanvas]: { roomId: string; authorId: string };
 };
 
 export type SocketServerEventsMap = {
