@@ -11,28 +11,18 @@ import { cn } from "@/lib/utils";
 import type { SocketRoomState } from "@scribble/shared";
 import { Users } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
-import type { ChatMessage } from "./components/chatPanel";
+import { useNavigate, useParams } from "react-router-dom";
 import { ChatPanel } from "./components/chatPanel";
 import { Canvas, type CanvasHandle } from "./components/canvas";
-
-const mockMessages: ChatMessage[] = [
-  {
-    id: 1,
-    author: "SketchMaster",
-    text: "That looks like a dragon!",
-    time: "12:05",
-  },
-  { id: 2, author: "You", text: "Nope, hotter!", time: "12:06" },
-  { id: 3, author: "GuessGuru", text: "Is it a rocket?", time: "12:06" },
-  { id: 4, author: "LineLegend", text: "I see it now 😄", time: "12:07" },
-];
 
 function Game() {
   const canvasRef = useRef<CanvasHandle | null>(null);
   const { roomId } = useParams();
+  const navigate = useNavigate();
   const service = useSocketService();
-  const currentUsername = service.getCurrentUsername();
+  const currentPlayer = service.getCurrentPlayer();
+  const currentPlayerId = currentPlayer?.id ?? null;
+  const currentUsername = currentPlayer?.name ?? service.getCurrentUsername();
   const [lobbyState, setLobbyState] = useState<SocketRoomState | null>(() =>
     service.getRoomState()
   );
@@ -52,7 +42,11 @@ function Game() {
         ...player,
         isHost: player.name === lobbyState.hostUsername,
         isCurrent: player.name === lobbyState.currentPlayerUsername,
-        isSelf: currentUsername ? player.name === currentUsername : false,
+        isSelf: currentPlayerId
+          ? player.id === currentPlayerId
+          : currentUsername
+          ? player.name === currentUsername
+          : false,
       }))
       .sort((a, b) => {
         if (a.isHost && !b.isHost) return -1;
@@ -61,9 +55,31 @@ function Game() {
         if (!a.isCurrent && b.isCurrent) return 1;
         return a.name.localeCompare(b.name);
       });
-  }, [currentUsername, lobbyState]);
+  }, [currentUsername, currentPlayerId, lobbyState]);
 
   const activeRoomId = lobbyState?.roomId ?? roomId ?? "Loading...";
+  const chatMessages = lobbyState?.chatMessages ?? [];
+
+  const handleLeaveLobby = () => {
+    const destinationRoomId = lobbyState?.roomId ?? roomId ?? "";
+    service.disconnect();
+    if (destinationRoomId) {
+      navigate(`/${destinationRoomId}`);
+      return;
+    }
+    navigate("/");
+  };
+
+  const handleSendChatMessage = (message: string) => {
+    if (!lobbyState?.roomId || !currentPlayer) {
+      return;
+    }
+    service.sendChatMessage({
+      roomId: lobbyState.roomId,
+      message,
+      authorId: currentPlayer.id,
+    });
+  };
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-background via-background/95 to-background">
@@ -146,10 +162,12 @@ function Game() {
               )}
             </CardContent>
             <CardFooter className="flex justify-between gap-3">
-              <Button variant="outline" className="w-full">
-                Ready up
-              </Button>
-              <Button variant="secondary" className="w-full">
+              <Button
+                variant="secondary"
+                className="w-full"
+                type="button"
+                onClick={handleLeaveLobby}
+              >
                 Leave lobby
               </Button>
             </CardFooter>
@@ -181,7 +199,13 @@ function Game() {
             </CardFooter>
           </Card>
 
-          <ChatPanel messages={mockMessages} />
+          <ChatPanel
+            messages={chatMessages}
+            disabled={!lobbyState || !currentPlayer}
+            onSendMessage={
+              lobbyState && currentPlayer ? handleSendChatMessage : undefined
+            }
+          />
         </div>
       </div>
     </main>

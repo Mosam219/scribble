@@ -3,13 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { MessageCircle, Send } from "lucide-react";
-
-export type ChatMessage = {
-  id: string | number;
-  author: string;
-  text: string;
-  time: string;
-};
+import type { ChatMessage } from "@scribble/shared";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type ChatPanelProps = {
   className?: string;
@@ -18,6 +13,7 @@ type ChatPanelProps = {
   messages: ChatMessage[];
   inputPlaceholder?: string;
   disabled?: boolean;
+  onSendMessage?: (message: string) => void;
 };
 
 export function ChatPanel({
@@ -27,11 +23,40 @@ export function ChatPanel({
   messages,
   inputPlaceholder = "Say something fun...",
   disabled = true,
+  onSendMessage,
 }: ChatPanelProps) {
+  const [messageInput, setMessageInput] = useState("");
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const formatter = useMemo(
+    () =>
+      new Intl.DateTimeFormat(undefined, {
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+    []
+  );
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  const handleSend = (event?: React.FormEvent<HTMLFormElement>) => {
+    event?.preventDefault();
+    const trimmedMessage = messageInput.trim();
+    if (disabled || !onSendMessage || trimmedMessage.length === 0) {
+      return;
+    }
+    onSendMessage(trimmedMessage);
+    setMessageInput("");
+  };
+
+  const isInputDisabled = disabled || !onSendMessage;
+  const canSend = !isInputDisabled && messageInput.trim().length > 0;
+
   return (
     <Card
       className={cn(
-        "flex flex-col border-primary/20 bg-background/60 backdrop-blur",
+        "flex flex-col border-primary/20 bg-background/60 backdrop-blur h-full",
         className
       )}
     >
@@ -47,7 +72,7 @@ export function ChatPanel({
         <MessageCircle className="h-5 w-5 text-primary" />
       </CardHeader>
       <CardContent className="flex flex-1 flex-col gap-4">
-        <div className="flex-1 space-y-3 overflow-y-auto pr-1">
+        <div className="flex-1 space-y-3 overflow-y-auto pr-1 max-h-162">
           {messages.map((message) => (
             <div
               key={message.id}
@@ -58,28 +83,32 @@ export function ChatPanel({
                   {message.author}
                 </span>
                 <span className="text-xs text-muted-foreground">
-                  {message.time}
+                  {formatter.format(new Date(message.timestamp))}
                 </span>
               </div>
               <p className="mt-1 text-muted-foreground">{message.text}</p>
             </div>
           ))}
+          <div ref={messagesEndRef} />
         </div>
-        <div className="flex items-center gap-2">
+        <form className="flex items-center gap-2" onSubmit={handleSend}>
           <Input
             placeholder={inputPlaceholder}
             className="flex-1"
-            disabled={disabled}
+            disabled={isInputDisabled}
+            value={messageInput}
+            onChange={(event) => setMessageInput(event.target.value)}
           />
           <Button
-            type="button"
+            type="submit"
             variant="secondary"
             size="icon"
-            disabled={disabled}
+            disabled={!canSend}
+            aria-label="Send chat message"
           >
             <Send className="h-4 w-4" />
           </Button>
-        </div>
+        </form>
       </CardContent>
     </Card>
   );

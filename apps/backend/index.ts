@@ -10,6 +10,7 @@ import {
   type SocketRoomState,
   SocketServerEvent,
   SocketServerEventsMap,
+  type ChatMessage,
 } from "@scribble/shared";
 
 const app = express();
@@ -51,9 +52,11 @@ type Room = {
   roomName: string;
   members: Map<string, string>;
   currentPlayerUsername: string | null;
+  chatMessages: ChatMessage[];
 };
 
 const rooms = new Map<string, Room>();
+const MAX_CHAT_HISTORY = 100;
 
 const createRoomCode = () => randomUUID().slice(0, 6).toUpperCase();
 
@@ -66,6 +69,7 @@ const broadcastRoomUpdate = (room: Room) => {
     })),
     hostUsername: room.hostUsername,
     currentPlayerUsername: room.currentPlayerUsername,
+    chatMessages: room.chatMessages,
   };
   io.to(room.id).emit(SocketServerEvent.RoomUpdated, roomState);
 };
@@ -92,6 +96,7 @@ io.on("connection", (socket) => {
       roomName: roomTitle,
       members: new Map([[socket.id, trimmedName]]),
       currentPlayerUsername: trimmedName,
+      chatMessages: [],
     };
 
     rooms.set(roomId, room);
@@ -103,6 +108,7 @@ io.on("connection", (socket) => {
     socket.emit(SocketServerEvent.JoinedRoom, {
       roomId,
       username: trimmedName,
+      playerId: socket.id,
     });
     broadcastRoomUpdate(room);
   });
@@ -141,6 +147,7 @@ io.on("connection", (socket) => {
     socket.emit(SocketServerEvent.JoinedRoom, {
       roomId: trimmedRoomId,
       username: trimmedName,
+      playerId: socket.id,
     });
 
     if (!room.currentPlayerUsername) {
@@ -149,6 +156,54 @@ io.on("connection", (socket) => {
 
     broadcastRoomUpdate(room);
   });
+
+  socket.on(
+    SocketClientEvent.SendChatMessage,
+    ({ roomId, message, authorId }) => {
+      const trimmedRoomId = roomId?.trim().toUpperCase();
+      const trimmedMessage = message?.trim();
+      const normalizedAuthorId = authorId?.trim();
+      if (!trimmedRoomId || !trimmedMessage || !normalizedAuthorId) {
+        return;
+      }
+
+      const room = rooms.get(trimmedRoomId);
+      if (!room) {
+        socket.emit(SocketServerEvent.RoomNotFound, {
+          roomId: trimmedRoomId,
+        });
+        return;
+      }
+
+      if (!room.members.has(socket.id)) {
+        return;
+      }
+
+      if (normalizedAuthorId !== socket.id) {
+        return;
+      }
+
+      const author = room.members.get(socket.id);
+      if (!author) {
+        return;
+      }
+
+      const chatMessage: ChatMessage = {
+        id: randomUUID(),
+        author,
+        authorId: socket.id,
+        text: trimmedMessage,
+        timestamp: Date.now(),
+      };
+
+      room.chatMessages.push(chatMessage);
+      if (room.chatMessages.length > MAX_CHAT_HISTORY) {
+        room.chatMessages.shift();
+      }
+
+      broadcastRoomUpdate(room);
+    }
+  );
 
   socket.on(SocketClientEvent.StartGame, ({ roomId }) => {
     const trimmedRoomId = roomId?.trim().toUpperCase();

@@ -9,17 +9,30 @@ export type Player = {
   name: string;
 };
 
+export type ChatMessage = {
+  id: string;
+  author: string;
+  authorId: string;
+  text: string;
+  timestamp: number;
+};
+
 export type SocketRoomState = {
   roomId: string;
   members: Player[];
   hostUsername: string;
   currentPlayerUsername: string | null;
+  chatMessages: ChatMessage[];
 };
 
 export type SocketServerEventPayloads = {
   [SocketServerEvent.Welcome]: string;
   [SocketServerEvent.RoomCreated]: { roomId: string };
-  [SocketServerEvent.JoinedRoom]: { roomId: string; username: string };
+  [SocketServerEvent.JoinedRoom]: {
+    roomId: string;
+    username: string;
+    playerId: string;
+  };
   [SocketServerEvent.RoomUpdated]: SocketRoomState;
   [SocketServerEvent.GameStarted]: { roomId: string };
   [SocketServerEvent.RoomFull]: { roomId: string };
@@ -30,6 +43,11 @@ export type SocketClientEventPayloads = {
   [SocketClientEvent.CreateRoom]: { username: string; roomTitle: string };
   [SocketClientEvent.JoinRoom]: { roomId: string; username: string };
   [SocketClientEvent.StartGame]: { roomId: string };
+  [SocketClientEvent.SendChatMessage]: {
+    roomId: string;
+    message: string;
+    authorId: string;
+  };
 };
 
 export type SocketServerEventsMap = {

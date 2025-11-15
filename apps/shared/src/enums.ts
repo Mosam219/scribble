@@ -12,4 +12,5 @@ export enum SocketClientEvent {
   CreateRoom = "createRoom",
   JoinRoom = "joinRoom",
   StartGame = "startGame",
+  SendChatMessage = "sendChatMessage",
 }

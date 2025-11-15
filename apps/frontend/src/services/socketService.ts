@@ -5,6 +5,7 @@ import {
   type SocketClientEventsMap,
   type SocketRoomState,
   type SocketServerEventsMap,
+  type Player,
 } from "@scribble/shared";
 
 type SocketServiceConfig = {
@@ -22,6 +23,9 @@ type JoinRoomPayload = Parameters<ClientEvents[SocketClientEvent.JoinRoom]>[0];
 type StartGamePayload = Parameters<
   ClientEvents[SocketClientEvent.StartGame]
 >[0];
+type SendChatMessagePayload = Parameters<
+  ClientEvents[SocketClientEvent.SendChatMessage]
+>[0];
 
 export class SocketService {
   private socket: Socket<ServerEvents, ClientEvents> | null = null;
@@ -32,6 +36,7 @@ export class SocketService {
     (state: SocketRoomState | null) => void
   >();
   private currentUsername: string | null = null;
+  private currentPlayerId: string | null = null;
 
   constructor(config: SocketServiceConfig = {}) {
     this.config = config;
@@ -80,18 +85,22 @@ export class SocketService {
     this.roomState = null;
     this.notifyRoomState();
     this.currentUsername = null;
+    this.currentPlayerId = null;
   };
 
   private handleJoinedRoom: ServerEvents[SocketServerEvent.JoinedRoom] = ({
     username,
+    playerId,
   }) => {
     this.currentUsername = username;
+    this.currentPlayerId = playerId;
   };
 
   private handleDisconnected = () => {
     this.roomState = null;
     this.notifyRoomState();
     this.currentUsername = null;
+    this.currentPlayerId = null;
   };
 
   private notifyRoomState() {
@@ -160,8 +169,25 @@ export class SocketService {
     socket.emit(SocketClientEvent.StartGame, payload);
   }
 
+  sendChatMessage(payload: SendChatMessagePayload) {
+    const socket = this.ensureSocket();
+    socket.emit(SocketClientEvent.SendChatMessage, payload);
+  }
+
   getCurrentUsername() {
     return this.currentUsername;
+  }
+
+  getCurrentPlayer(): Player | null {
+    if (!this.roomState || !this.currentPlayerId) {
+      return null;
+    }
+
+    return (
+      this.roomState.members.find(
+        (member) => member.id === this.currentPlayerId
+      ) ?? null
+    );
   }
 
   disconnect() {
@@ -174,5 +200,6 @@ export class SocketService {
     this.roomState = null;
     this.notifyRoomState();
     this.currentUsername = null;
+    this.currentPlayerId = null;
   }
 }
