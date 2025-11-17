@@ -56,14 +56,52 @@ type Room = {
   members: Map<string, string>;
   currentPlayerId: string | null;
   chatMessages: ChatMessage[];
+  round: number;
+  totalRounds: number;
+  turnOrder: string[];
+  turnIndex: number;
+  currentWord: string | null;
+  currentWordLength: number | null;
+  pendingWordChoices: string[];
+  turnEndsAt: number | null;
+  turnTimer: NodeJS.Timeout | null;
+  gameActive: boolean;
+  scores: Map<string, number>;
 };
 
 const rooms = new Map<string, Room>();
 const MAX_CHAT_HISTORY = 100;
+const TOTAL_ROUNDS = 1;
+const TURN_DURATION_MS = 30_000;
+const WORD_OPTIONS_PER_TURN = 3;
+const WORD_BANK = [
+  "Sunrise",
+  "Mountain",
+  "River",
+  "Castle",
+  "Robot",
+  "Guitar",
+  "Pizza",
+  "Spaceship",
+  "Butterfly",
+  "Dragon",
+  "Rainbow",
+  "Forest",
+  "Camera",
+  "Lighthouse",
+  "Volcano",
+];
 
 const createRoomCode = () => randomUUID().slice(0, 6).toUpperCase();
 
 const broadcastRoomUpdate = (room: Room) => {
+  const leaderboard = Array.from(room.scores.entries())
+    .map(([playerId, score]) => {
+      const name = room.members.get(playerId) ?? "Unknown";
+      return { playerId, name, score };
+    })
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+
   const roomState: SocketRoomState = {
     roomId: room.id,
     members: Array.from(room.members.entries()).map(([id, name]) => ({
@@ -72,9 +110,149 @@ const broadcastRoomUpdate = (room: Room) => {
     })),
     hostUsername: room.hostUsername,
     currentPlayerId: room.currentPlayerId,
+    round: room.round,
+    totalRounds: room.totalRounds,
+    turnEndsAt: room.turnEndsAt,
+    currentWordLength: room.currentWordLength,
+    leaderboard,
     chatMessages: room.chatMessages,
   };
   io.to(room.id).emit(SocketServerEvent.RoomUpdated, roomState);
+};
+
+const pickRandomWords = (count: number) => {
+  const available = [...WORD_BANK];
+  const selections: string[] = [];
+  while (selections.length < count && available.length > 0) {
+    const index = Math.floor(Math.random() * available.length);
+    const [word] = available.splice(index, 1);
+    if (word) {
+      selections.push(word);
+    }
+  }
+  return selections;
+};
+
+const resetTurnState = (room: Room) => {
+  if (room.turnTimer) {
+    clearTimeout(room.turnTimer);
+    room.turnTimer = null;
+  }
+  room.turnEndsAt = null;
+  room.currentWord = null;
+  room.currentWordLength = null;
+  room.pendingWordChoices = [];
+};
+
+const finishGame = (room: Room) => {
+  resetTurnState(room);
+  room.gameActive = false;
+  room.turnOrder = [];
+  room.turnIndex = 0;
+  room.currentPlayerId = null;
+  room.round = 0;
+  broadcastRoomUpdate(room);
+  io.to(room.id).emit(SocketServerEvent.GameEnded, { roomId: room.id });
+};
+
+const beginNextTurn = (room: Room) => {
+  resetTurnState(room);
+
+  if (!room.turnOrder.length || room.turnIndex >= room.turnOrder.length) {
+    finishGame(room);
+    return;
+  }
+
+  const drawerId = room.turnOrder[room.turnIndex];
+  if (!drawerId || !room.members.has(drawerId)) {
+    room.turnOrder.splice(room.turnIndex, 1);
+    beginNextTurn(room);
+    return;
+  }
+
+  room.currentPlayerId = drawerId;
+  room.pendingWordChoices = pickRandomWords(WORD_OPTIONS_PER_TURN);
+  broadcastRoomUpdate(room);
+
+  setTimeout(() => {
+    io.to(drawerId).emit(SocketServerEvent.WordOptions, {
+      roomId: room.id,
+      words: room.pendingWordChoices,
+      round: room.round,
+      totalRounds: room.totalRounds,
+    });
+  }, 1000);
+};
+
+const startDrawingPhase = (room: Room, drawerId: string, word: string) => {
+  room.currentWord = word;
+  room.currentWordLength = word.length;
+  room.pendingWordChoices = [];
+  const turnEndsAt = Date.now() + TURN_DURATION_MS;
+  room.turnEndsAt = turnEndsAt;
+  broadcastRoomUpdate(room);
+
+  io.to(room.id).emit(SocketServerEvent.CanvasCleared, {
+    roomId: room.id,
+    authorId: "system",
+  });
+
+  io.to(room.id).emit(SocketServerEvent.TurnStarted, {
+    roomId: room.id,
+    drawerId,
+    round: room.round,
+    totalRounds: room.totalRounds,
+    turnEndsAt,
+  });
+
+  room.turnTimer = setTimeout(() => {
+    endCurrentTurn(room.id);
+  }, TURN_DURATION_MS);
+};
+
+const endCurrentTurn = (roomId: string) => {
+  const room = rooms.get(roomId);
+  if (!room) {
+    return;
+  }
+
+  const previousDrawer = room.currentPlayerId ?? null;
+  resetTurnState(room);
+  room.turnIndex += 1;
+
+  io.to(room.id).emit(SocketServerEvent.TurnEnded, {
+    roomId: room.id,
+    drawerId: previousDrawer,
+    nextDrawerId:
+      room.turnIndex < room.turnOrder.length
+        ? room.turnOrder[room.turnIndex]
+        : null,
+    round: room.round,
+    totalRounds: room.totalRounds,
+  });
+
+  if (room.turnIndex >= room.turnOrder.length) {
+    finishGame(room);
+    return;
+  }
+
+  const leaderboardSnapshot = Array.from(room.scores.entries())
+    .map(([playerId, score]) => ({
+      playerId,
+      name: room.members.get(playerId) ?? "Unknown",
+      score,
+    }))
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+
+  io.to(room.id).emit(SocketServerEvent.LeaderboardShown, {
+    roomId: room.id,
+    leaderboard: leaderboardSnapshot,
+    round: room.round,
+  });
+
+  setTimeout(() => {
+    beginNextTurn(room);
+  }, 5000);
 };
 
 io.on("connection", (socket) => {
@@ -100,6 +278,17 @@ io.on("connection", (socket) => {
       members: new Map([[socket.id, trimmedName]]),
       currentPlayerId: socket.id,
       chatMessages: [],
+      round: 0,
+      totalRounds: TOTAL_ROUNDS,
+      turnOrder: [],
+      turnIndex: 0,
+      currentWord: null,
+      currentWordLength: null,
+      pendingWordChoices: [],
+      turnEndsAt: null,
+      turnTimer: null,
+      gameActive: false,
+      scores: new Map([[socket.id, 0]]),
     };
 
     rooms.set(roomId, room);
@@ -117,6 +306,9 @@ io.on("connection", (socket) => {
   });
 
   const chooseNextCurrentPlayer = (room: Room) => {
+    if (room.gameActive) {
+      return;
+    }
     const nextPlayerId = room.members.keys().next().value ?? null;
     room.currentPlayerId = nextPlayerId ?? null;
   };
@@ -143,6 +335,9 @@ io.on("connection", (socket) => {
     }
 
     room.members.set(socket.id, trimmedName);
+    if (!room.scores.has(socket.id)) {
+      room.scores.set(socket.id, 0);
+    }
     socket.join(trimmedRoomId);
     socket.data.username = trimmedName;
     socket.data.roomId = trimmedRoomId;
@@ -191,11 +386,30 @@ io.on("connection", (socket) => {
         return;
       }
 
+      const normalizedCurrentWord = room.currentWord
+        ? room.currentWord.trim().toLowerCase()
+        : null;
+      const isDrawer = room.currentPlayerId === socket.id;
+      const messageMatchesPrompt =
+        !isDrawer &&
+        room.gameActive &&
+        normalizedCurrentWord &&
+        trimmedMessage.toLowerCase() === normalizedCurrentWord;
+
+      const displayText = messageMatchesPrompt
+        ? `${author} guessed the word!`
+        : trimmedMessage;
+
+      if (messageMatchesPrompt) {
+        const currentScore = room.scores.get(socket.id) ?? 0;
+        room.scores.set(socket.id, currentScore + 10);
+      }
+
       const chatMessage: ChatMessage = {
         id: randomUUID(),
         author,
         authorId: socket.id,
-        text: trimmedMessage,
+        text: displayText,
         timestamp: Date.now(),
       };
 
@@ -207,6 +421,38 @@ io.on("connection", (socket) => {
       broadcastRoomUpdate(room);
     }
   );
+
+  socket.on(SocketClientEvent.SelectWord, ({ roomId, word }) => {
+    const trimmedRoomId = roomId?.trim().toUpperCase();
+    const trimmedWord = word?.trim();
+
+    if (!trimmedRoomId || !trimmedWord) {
+      return;
+    }
+
+    const room = rooms.get(trimmedRoomId);
+    if (!room) {
+      socket.emit(SocketServerEvent.RoomNotFound, {
+        roomId: trimmedRoomId,
+      });
+      return;
+    }
+
+    if (!room.gameActive) {
+      return;
+    }
+
+    if (room.currentPlayerId !== socket.id) {
+      return;
+    }
+
+    if (!room.pendingWordChoices.includes(trimmedWord)) {
+      return;
+    }
+
+    room.pendingWordChoices = [];
+    startDrawingPhase(room, socket.id, trimmedWord);
+  });
 
   const sanitizePoint = (point: CanvasPoint): CanvasPoint | null => {
     const x = Number(point?.x);
@@ -251,9 +497,7 @@ io.on("connection", (socket) => {
           points: sanitizedPoints,
         };
       })
-      .filter(
-        (segment): segment is CanvasStrokeSegment => segment !== null
-      );
+      .filter((segment): segment is CanvasStrokeSegment => segment !== null);
   };
 
   socket.on(
@@ -346,7 +590,25 @@ io.on("connection", (socket) => {
       return;
     }
 
+    if (room.gameActive) {
+      return;
+    }
+
+    const turnOrder = Array.from(room.members.keys());
+    if (turnOrder.length === 0) {
+      return;
+    }
+
+    room.turnOrder = turnOrder;
+    room.turnIndex = 0;
+    room.round = 1;
+    room.totalRounds = TOTAL_ROUNDS;
+    room.gameActive = true;
+    room.currentPlayerId = null;
+
+    broadcastRoomUpdate(room);
     io.to(room.id).emit(SocketServerEvent.GameStarted, { roomId: room.id });
+    beginNextTurn(room);
   });
 
   socket.on("disconnect", (reason) => {
@@ -363,15 +625,22 @@ io.on("connection", (socket) => {
     }
 
     room.members.delete(socket.id);
-
-    if (room.currentPlayerId === socket.id) {
-      chooseNextCurrentPlayer(room);
-    }
+    room.scores.delete(socket.id);
 
     if (room.members.size === 0 || socket.id === room.hostId) {
+      resetTurnState(room);
       rooms.delete(roomId);
       io.to(roomId).socketsLeave(roomId);
       return;
+    }
+
+    if (room.gameActive && room.currentPlayerId === socket.id) {
+      endCurrentTurn(room.id);
+      return;
+    }
+
+    if (!room.gameActive && room.currentPlayerId === socket.id) {
+      chooseNextCurrentPlayer(room);
     }
 
     broadcastRoomUpdate(room);

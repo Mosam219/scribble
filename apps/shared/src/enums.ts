@@ -8,6 +8,11 @@ export enum SocketServerEvent {
   RoomNotFound = "roomNotFound",
   DrawingBroadcast = "drawingBroadcast",
   CanvasCleared = "canvasCleared",
+  WordOptions = "wordOptions",
+  TurnStarted = "turnStarted",
+  TurnEnded = "turnEnded",
+  GameEnded = "gameEnded",
+  LeaderboardShown = "leaderboardShown",
 }
 
 export enum SocketClientEvent {
@@ -17,4 +22,5 @@ export enum SocketClientEvent {
   SendChatMessage = "sendChatMessage",
   SendDrawing = "sendDrawing",
   ClearCanvas = "clearCanvas",
+  SelectWord = "selectWord",
 }

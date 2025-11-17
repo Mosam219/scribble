@@ -35,11 +35,22 @@ export type CanvasDrawingPayload = {
   segments: CanvasStrokeSegment[];
 };
 
+export type LeaderboardEntry = {
+  playerId: string;
+  name: string;
+  score: number;
+};
+
 export type SocketRoomState = {
   roomId: string;
   members: Player[];
   hostUsername: string;
   currentPlayerId: string | null;
+  round: number;
+  totalRounds: number;
+  turnEndsAt: number | null;
+  currentWordLength: number | null;
+  leaderboard: LeaderboardEntry[];
   chatMessages: ChatMessage[];
 };
 
@@ -57,6 +68,32 @@ export type SocketServerEventPayloads = {
   [SocketServerEvent.RoomNotFound]: { roomId: string };
   [SocketServerEvent.DrawingBroadcast]: CanvasDrawingPayload;
   [SocketServerEvent.CanvasCleared]: { roomId: string; authorId: string };
+  [SocketServerEvent.WordOptions]: {
+    roomId: string;
+    words: string[];
+    round: number;
+    totalRounds: number;
+  };
+  [SocketServerEvent.TurnStarted]: {
+    roomId: string;
+    drawerId: string;
+    round: number;
+    totalRounds: number;
+    turnEndsAt: number;
+  };
+  [SocketServerEvent.TurnEnded]: {
+    roomId: string;
+    drawerId: string | null;
+    nextDrawerId: string | null;
+    round: number;
+    totalRounds: number;
+  };
+  [SocketServerEvent.GameEnded]: { roomId: string };
+  [SocketServerEvent.LeaderboardShown]: {
+    roomId: string;
+    leaderboard: LeaderboardEntry[];
+    round: number;
+  };
 };
 
 export type SocketClientEventPayloads = {
@@ -70,6 +107,7 @@ export type SocketClientEventPayloads = {
   };
   [SocketClientEvent.SendDrawing]: CanvasDrawingPayload;
   [SocketClientEvent.ClearCanvas]: { roomId: string; authorId: string };
+  [SocketClientEvent.SelectWord]: { roomId: string; word: string };
 };
 
 export type SocketServerEventsMap = {

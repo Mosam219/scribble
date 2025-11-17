@@ -32,6 +32,9 @@ type SendDrawingPayload = Parameters<
 type ClearCanvasPayload = Parameters<
   ClientEvents[SocketClientEvent.ClearCanvas]
 >[0];
+type SelectWordPayload = Parameters<
+  ClientEvents[SocketClientEvent.SelectWord]
+>[0];
 
 export class SocketService {
   private socket: Socket<ServerEvents, ClientEvents> | null = null;
@@ -191,6 +194,11 @@ export class SocketService {
   sendClearCanvas(payload: ClearCanvasPayload) {
     const socket = this.ensureSocket();
     socket.emit(SocketClientEvent.ClearCanvas, payload);
+  }
+
+  selectWord(payload: SelectWordPayload) {
+    const socket = this.ensureSocket();
+    socket.emit(SocketClientEvent.SelectWord, payload);
   }
 
   getCurrentUsername() {

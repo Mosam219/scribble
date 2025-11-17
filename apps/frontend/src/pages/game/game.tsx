@@ -14,7 +14,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ChatPanel } from "./components/chatPanel";
 import { Canvas, type CanvasHandle } from "./components/canvas";
-import { SocketServerEvent, type CanvasStrokeSegment } from "@scribble/shared";
+import {
+  SocketServerEvent,
+  type CanvasStrokeSegment,
+  type LeaderboardEntry,
+} from "@scribble/shared";
 
 function Game() {
   const canvasRef = useRef<CanvasHandle | null>(null);
@@ -27,6 +31,14 @@ function Game() {
   const [lobbyState, setLobbyState] = useState<SocketRoomState | null>(() =>
     service.getRoomState()
   );
+  const [wordOptions, setWordOptions] = useState<string[]>([]);
+  const [selectedWord, setSelectedWord] = useState<string | null>(null);
+  const [remainingMs, setRemainingMs] = useState<number>(0);
+  const [leaderboardPopup, setLeaderboardPopup] = useState<{
+    visible: boolean;
+    entries: LeaderboardEntry[];
+    round: number;
+  }>({ visible: false, entries: [], round: 0 });
 
   useEffect(() => {
     const unsubscribe = service.subscribeToRoomState(setLobbyState);
@@ -60,11 +72,13 @@ function Game() {
 
   const activeRoomId = lobbyState?.roomId ?? roomId ?? "Loading...";
   const chatMessages = lobbyState?.chatMessages ?? [];
-  const canDraw =
+  const leaderboardEntries = lobbyState?.leaderboard ?? [];
+  const isCurrentDrawer =
     Boolean(
       lobbyState?.currentPlayerId &&
         currentPlayer?.id === lobbyState.currentPlayerId
     ) && Boolean(currentPlayer);
+  const canDraw = isCurrentDrawer && Boolean(selectedWord);
 
   const currentDrawerName = useMemo(() => {
     if (!lobbyState?.currentPlayerId) {
@@ -77,18 +91,52 @@ function Game() {
     );
   }, [lobbyState]);
 
+  const wordLengthHint = lobbyState?.currentWordLength ?? null;
+  const roundNumber = lobbyState?.round ?? 0;
+  const totalRounds = lobbyState?.totalRounds ?? 1;
+  const turnEndsAt = lobbyState?.turnEndsAt ?? null;
+  console.log(isCurrentDrawer, wordOptions, selectedWord, "dsds");
   const statusMessage = (() => {
     if (!lobbyState) {
       return "Connecting to the game...";
+    }
+    if (isCurrentDrawer && wordOptions.length > 0) {
+      return "Choose a word to start drawing.";
+    }
+    if (isCurrentDrawer && !selectedWord) {
+      return "Waiting for your word choice...";
     }
     if (canDraw && currentPlayer) {
       return "It's your turn to draw!";
     }
     if (currentDrawerName) {
+      if (wordLengthHint) {
+        return `${currentDrawerName} is drawing a ${wordLengthHint}-letter word`;
+      }
       return `${currentDrawerName} is drawing`;
     }
     return "Waiting for the game to start";
   })();
+
+  useEffect(() => {
+    if (!turnEndsAt) {
+      setRemainingMs(0);
+      return;
+    }
+    const updateRemaining = () => {
+      setRemainingMs(Math.max(0, turnEndsAt - Date.now()));
+    };
+    updateRemaining();
+    const interval = window.setInterval(updateRemaining, 200);
+    return () => window.clearInterval(interval);
+  }, [turnEndsAt]);
+
+  useEffect(() => {
+    if (!isCurrentDrawer) {
+      setSelectedWord(null);
+      setWordOptions([]);
+    }
+  }, [isCurrentDrawer]);
 
   const handleLeaveLobby = () => {
     const destinationRoomId = lobbyState?.roomId ?? roomId ?? "";
@@ -137,6 +185,15 @@ function Game() {
     canvasRef.current?.clear();
   }, [currentPlayer, lobbyState?.roomId, service]);
 
+  const handleWordSelection = (word: string) => {
+    if (!lobbyState?.roomId || !isCurrentDrawer) {
+      return;
+    }
+    setSelectedWord(word);
+    setWordOptions([]);
+    service.selectWord({ roomId: lobbyState.roomId, word });
+  };
+
   useEffect(() => {
     const removeDrawingListener = service.on(
       SocketServerEvent.DrawingBroadcast,
@@ -153,12 +210,59 @@ function Game() {
         canvasRef.current?.clear();
       }
     );
+    console.log("dmaskldnsalkdn");
+    const removeWordOptions = service.on(
+      SocketServerEvent.WordOptions,
+      ({ words }) => {
+        setWordOptions(words);
+        setSelectedWord(null);
+      }
+    );
+    const removeTurnStarted = service.on(
+      SocketServerEvent.TurnStarted,
+      ({ drawerId }) => {
+        if (!isCurrentDrawer || drawerId !== currentPlayerId) {
+          setSelectedWord(null);
+        }
+        setLeaderboardPopup((popup) => ({ ...popup, visible: false }));
+      }
+    );
+    const removeTurnEnded = service.on(SocketServerEvent.TurnEnded, () => {
+      setWordOptions([]);
+      setSelectedWord(null);
+    });
+    const removeLeaderboardShown = service.on(
+      SocketServerEvent.LeaderboardShown,
+      ({ leaderboard, round }) => {
+        setLeaderboardPopup({
+          visible: true,
+          entries: leaderboard,
+          round,
+        });
+        setTimeout(() => {
+          setLeaderboardPopup((prev) => ({
+            ...prev,
+            visible: false,
+          }));
+        }, 5000);
+      }
+    );
+    const removeGameEnded = service.on(SocketServerEvent.GameEnded, () => {
+      setWordOptions([]);
+      setSelectedWord(null);
+      setLeaderboardPopup({ visible: false, entries: [], round: 0 });
+    });
 
     return () => {
       removeDrawingListener();
       removeClearListener();
+      removeWordOptions();
+      removeTurnStarted();
+      removeTurnEnded();
+      removeLeaderboardShown();
+      removeGameEnded();
     };
-  }, [service]);
+  }, [currentPlayerId, isCurrentDrawer, service]);
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-background via-background/95 to-background">
@@ -173,8 +277,15 @@ function Game() {
             </h1>
           </div>
           <div className="space-y-1 text-right text-sm text-muted-foreground sm:text-base">
-            <p>Round 1 of 10</p>
-            <p>Prompt revealed in 00:12</p>
+            <p>
+              Round {Math.max(1, roundNumber)} of {totalRounds}
+            </p>
+            <p>
+              Time left:{" "}
+              {turnEndsAt
+                ? `${Math.max(0, Math.ceil(remainingMs / 1000))}s`
+                : "Waiting"}
+            </p>
           </div>
         </header>
 
@@ -264,6 +375,26 @@ function Game() {
               </div>
             </CardHeader>
             <CardContent className="flex-1">
+              {isCurrentDrawer && wordOptions.length > 0 ? (
+                <div className="mb-4 rounded-xl border border-primary/30 bg-primary/10 p-4 text-center">
+                  <p className="mb-3 text-sm font-semibold uppercase tracking-wide text-primary">
+                    Choose a word
+                  </p>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    {wordOptions.map((word) => (
+                      <Button
+                        key={word}
+                        type="button"
+                        variant="secondary"
+                        className="text-base font-semibold"
+                        onClick={() => handleWordSelection(word)}
+                      >
+                        {word}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               <Canvas
                 ref={canvasRef}
                 statusMessage={statusMessage}
@@ -272,15 +403,60 @@ function Game() {
                 onRequestClear={handleClearCanvas}
                 clearDisabled={!canDraw}
               />
+              {leaderboardPopup.visible ? (
+                <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+                  <div className="w-full max-w-md rounded-2xl border border-primary/20 bg-background p-6 text-center shadow-xl">
+                    <p className="text-sm uppercase tracking-wide text-muted-foreground">
+                      Round {leaderboardPopup.round} results
+                    </p>
+                    <h3 className="mt-2 text-2xl font-semibold text-foreground">
+                      Leaderboard
+                    </h3>
+                    <ul className="mt-4 space-y-2">
+                      {leaderboardPopup.entries
+                        .slice(0, 5)
+                        .map((entry, idx) => (
+                          <li
+                            key={entry.playerId}
+                            className="flex items-center justify-between rounded-lg bg-primary/5 px-4 py-2 text-sm"
+                          >
+                            <div className="flex items-center gap-3">
+                              <span className="text-xs font-semibold text-muted-foreground">
+                                #{idx + 1}
+                              </span>
+                              <span className="font-medium">{entry.name}</span>
+                            </div>
+                            <span className="font-semibold text-primary">
+                              {entry.score}
+                            </span>
+                          </li>
+                        ))}
+                    </ul>
+                    <p className="mt-4 text-xs text-muted-foreground">
+                      Next turn will start shortly...
+                    </p>
+                  </div>
+                </div>
+              ) : null}
             </CardContent>
             <CardFooter className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
               <div>
                 Prompt:{" "}
-                <span className="font-semibold text-primary">Hidden</span>
+                <span className="font-semibold text-primary">
+                  {isCurrentDrawer && selectedWord
+                    ? selectedWord
+                    : wordLengthHint
+                    ? `${wordLengthHint} letters`
+                    : "Hidden"}
+                </span>
               </div>
               <div>
                 Time left:{" "}
-                <span className="font-semibold text-primary">01:32</span>
+                <span className="font-semibold text-primary">
+                  {turnEndsAt
+                    ? `${Math.max(0, Math.ceil(remainingMs / 1000))}s`
+                    : "—"}
+                </span>
               </div>
             </CardFooter>
           </Card>
